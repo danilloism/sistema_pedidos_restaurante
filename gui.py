@@ -1,313 +1,363 @@
 """
-Interface Gráfica do Sistema de Pedidos
-Monitora em tempo real o estado do sistema, processos e memória compartilhada
+Interface Gráfica com Controle de Execução
 """
 import tkinter as tk
-from tkinter import ttk, scrolledtext
+from tkinter import ttk, scrolledtext, messagebox
 import time
 import psutil
-import os
-import signal
-from threading import Thread
+from threading import Thread, Timer
 from shared_memory_manager import SharedMemoryManager, PedidoStatus
 
 class SistemaGUI:
-    """Interface gráfica para monitoramento do sistema"""
-
-    def __init__(self, processos_dict):
-        self.processos = processos_dict
+    def __init__(self, sistema):
+        self.sistema = sistema
         self.root = tk.Tk()
         self.root.title("Sistema de Gerenciamento de Pedidos - Restaurante")
-        self.root.geometry("1200x800")
+        self.root.geometry("1300x850")
         self.root.configure(bg='#f0f0f0')
 
-        # Cores
         self.cor_bg = '#f0f0f0'
         self.cor_frame = '#ffffff'
         self.cor_header = '#2c3e50'
+        self.cor_sucesso = '#27ae60'
         self.cor_pendente = '#f39c12'
         self.cor_preparo = '#3498db'
         self.cor_concluido = '#27ae60'
 
         self.shm_manager = None
-        self.rodando = True
+        self.rodando = False
+        self.sistema_iniciado = False
+        self.timer_parada = None
 
         self.criar_interface()
-        self.iniciar_atualizacao()
 
     def criar_interface(self):
-        """Cria todos os componentes da interface"""
-
         # Título
         titulo_frame = tk.Frame(self.root, bg=self.cor_header, height=60)
-        titulo_frame.pack(fill=tk.X, padx=0, pady=0)
+        titulo_frame.pack(fill=tk.X)
         titulo_frame.pack_propagate(False)
 
-        titulo = tk.Label(
-            titulo_frame,
-            text="🍽️ Sistema de Gerenciamento de Pedidos",
-            font=("Arial", 20, "bold"),
-            bg=self.cor_header,
-            fg='white'
-        )
+        titulo = tk.Label(titulo_frame, text="🍽️ Sistema de Gerenciamento de Pedidos",
+                         font=("Arial", 20, "bold"), bg=self.cor_header, fg='white')
         titulo.pack(pady=15)
+
+        # Painel de controle no topo
+        self.criar_painel_controle()
 
         # Frame principal
         main_frame = tk.Frame(self.root, bg=self.cor_bg)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # Painel esquerdo - Estatísticas e Processos
         left_frame = tk.Frame(main_frame, bg=self.cor_bg)
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
 
         self.criar_painel_estatisticas(left_frame)
         self.criar_painel_processos(left_frame)
 
-        # Painel direito - Pedidos
         right_frame = tk.Frame(main_frame, bg=self.cor_bg)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
 
         self.criar_painel_pedidos(right_frame)
         self.criar_painel_logs(right_frame)
 
+    def criar_painel_controle(self):
+        """Painel de controle com configurações e botões"""
+        frame = tk.LabelFrame(self.root, text="⚙️ Controle do Sistema",
+                             font=("Arial", 12, "bold"), bg=self.cor_frame, padx=15, pady=15)
+        frame.pack(fill=tk.X, padx=10, pady=(10, 0))
+
+        # Container para organizar em grid
+        grid_frame = tk.Frame(frame, bg=self.cor_frame)
+        grid_frame.pack(fill=tk.X)
+
+        # Linha 1: Configurações
+        tk.Label(grid_frame, text="Nº Produtores:", font=("Arial", 10),
+                bg=self.cor_frame).grid(row=0, column=0, padx=5, pady=5, sticky='e')
+
+        self.spin_produtores = ttk.Spinbox(grid_frame, from_=1, to=10, width=10)
+        self.spin_produtores.set(2)
+        self.spin_produtores.grid(row=0, column=1, padx=5, pady=5, sticky='w')
+
+        tk.Label(grid_frame, text="Nº Consumidores:", font=("Arial", 10),
+                bg=self.cor_frame).grid(row=0, column=2, padx=5, pady=5, sticky='e')
+
+        self.spin_consumidores = ttk.Spinbox(grid_frame, from_=1, to=10, width=10)
+        self.spin_consumidores.set(3)
+        self.spin_consumidores.grid(row=0, column=3, padx=5, pady=5, sticky='w')
+
+        tk.Label(grid_frame, text="Duração (segundos):", font=("Arial", 10),
+                bg=self.cor_frame).grid(row=0, column=4, padx=5, pady=5, sticky='e')
+
+        self.spin_duracao = ttk.Spinbox(grid_frame, from_=0, to=600, width=10)
+        self.spin_duracao.set(0)
+        self.spin_duracao.grid(row=0, column=5, padx=5, pady=5, sticky='w')
+
+        tk.Label(grid_frame, text="(0 = ilimitado)", font=("Arial", 8, "italic"),
+                bg=self.cor_frame, fg='gray').grid(row=0, column=6, padx=5, pady=5, sticky='w')
+
+        # Linha 2: Botões de ação
+        btn_frame = tk.Frame(frame, bg=self.cor_frame)
+        btn_frame.pack(fill=tk.X, pady=(10, 0))
+
+        self.btn_iniciar = tk.Button(btn_frame, text="▶️ INICIAR SISTEMA",
+                                     font=("Arial", 12, "bold"), bg=self.cor_sucesso,
+                                     fg='white', command=self.iniciar_sistema,
+                                     padx=20, pady=10, cursor='hand2')
+        self.btn_iniciar.pack(side=tk.LEFT, padx=5)
+
+        self.btn_parar = tk.Button(btn_frame, text="⏹️ PARAR SISTEMA",
+                                   font=("Arial", 12, "bold"), bg='#e74c3c',
+                                   fg='white', command=self.parar_sistema,
+                                   padx=20, pady=10, cursor='hand2', state=tk.DISABLED)
+        self.btn_parar.pack(side=tk.LEFT, padx=5)
+
+        self.btn_limpar = tk.Button(btn_frame, text="🧹 LIMPAR DADOS",
+                                    font=("Arial", 12), bg='#95a5a6',
+                                    fg='white', command=self.limpar_dados,
+                                    padx=20, pady=10, cursor='hand2')
+        self.btn_limpar.pack(side=tk.LEFT, padx=5)
+
+        # Label de status
+        self.label_status = tk.Label(btn_frame, text="● Sistema Parado",
+                                     font=("Arial", 12, "bold"), bg=self.cor_frame,
+                                     fg='#e74c3c')
+        self.label_status.pack(side=tk.RIGHT, padx=10)
+
     def criar_painel_estatisticas(self, parent):
-        """Cria painel de estatísticas"""
-        frame = tk.LabelFrame(
-            parent,
-            text="📊 Estatísticas do Sistema",
-            font=("Arial", 12, "bold"),
-            bg=self.cor_frame,
-            padx=10,
-            pady=10
-        )
+        frame = tk.LabelFrame(parent, text="📊 Estatísticas do Sistema",
+                             font=("Arial", 12, "bold"), bg=self.cor_frame, padx=10, pady=10)
         frame.pack(fill=tk.X, pady=(0, 10))
 
-        # Grid de estatísticas
         stats_grid = tk.Frame(frame, bg=self.cor_frame)
         stats_grid.pack(fill=tk.X)
 
-        # Total Criados
-        self.label_total_criados = self.criar_stat_label(
-            stats_grid, "Total Criados", "0", self.cor_header, 0, 0
-        )
-
-        # Total Processados
-        self.label_total_processados = self.criar_stat_label(
-            stats_grid, "Processados", "0", self.cor_concluido, 0, 1
-        )
-
-        # Em Fila
-        self.label_em_fila = self.criar_stat_label(
-            stats_grid, "Em Fila", "0", self.cor_pendente, 1, 0
-        )
-
-        # Em Preparo
-        self.label_em_preparo = self.criar_stat_label(
-            stats_grid, "Em Preparo", "0", self.cor_preparo, 1, 1
-        )
+        self.label_total_criados = self.criar_stat_label(stats_grid, "Total Criados", "0", self.cor_header, 0, 0)
+        self.label_total_processados = self.criar_stat_label(stats_grid, "Processados", "0", self.cor_concluido, 0, 1)
+        self.label_em_fila = self.criar_stat_label(stats_grid, "Em Fila", "0", self.cor_pendente, 1, 0)
+        self.label_em_preparo = self.criar_stat_label(stats_grid, "Em Preparo", "0", self.cor_preparo, 1, 1)
 
     def criar_stat_label(self, parent, texto, valor, cor, row, col):
-        """Cria um label de estatística"""
         container = tk.Frame(parent, bg=cor, relief=tk.RAISED, borderwidth=2)
         container.grid(row=row, column=col, padx=5, pady=5, sticky='ew')
         parent.grid_columnconfigure(col, weight=1)
 
-        label_texto = tk.Label(
-            container,
-            text=texto,
-            font=("Arial", 10),
-            bg=cor,
-            fg='white'
-        )
-        label_texto.pack(pady=(5, 0))
-
-        label_valor = tk.Label(
-            container,
-            text=valor,
-            font=("Arial", 24, "bold"),
-            bg=cor,
-            fg='white'
-        )
+        tk.Label(container, text=texto, font=("Arial", 10), bg=cor, fg='white').pack(pady=(5, 0))
+        label_valor = tk.Label(container, text=valor, font=("Arial", 24, "bold"), bg=cor, fg='white')
         label_valor.pack(pady=(0, 5))
-
         return label_valor
 
     def criar_painel_processos(self, parent):
-        """Cria painel de monitoramento de processos"""
-        frame = tk.LabelFrame(
-            parent,
-            text="⚙️ Processos Ativos",
-            font=("Arial", 12, "bold"),
-            bg=self.cor_frame,
-            padx=10,
-            pady=10
-        )
+        frame = tk.LabelFrame(parent, text="⚙️ Processos Ativos",
+                             font=("Arial", 12, "bold"), bg=self.cor_frame, padx=10, pady=10)
         frame.pack(fill=tk.BOTH, expand=True)
 
-        # Treeview para processos
         columns = ('Tipo', 'ID', 'PID', 'Status', 'CPU%', 'MEM (MB)')
         self.tree_processos = ttk.Treeview(frame, columns=columns, show='headings', height=8)
 
         for col in columns:
             self.tree_processos.heading(col, text=col)
-            if col == 'Tipo':
-                self.tree_processos.column(col, width=100)
-            elif col in ['ID', 'PID', 'Status']:
-                self.tree_processos.column(col, width=80)
-            else:
-                self.tree_processos.column(col, width=70)
+            self.tree_processos.column(col, width=100 if col == 'Tipo' else 80)
 
         scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.tree_processos.yview)
         self.tree_processos.configure(yscroll=scrollbar.set)
-
         self.tree_processos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
     def criar_painel_pedidos(self, parent):
-        """Cria painel de pedidos"""
-        frame = tk.LabelFrame(
-            parent,
-            text="📋 Fila de Pedidos",
-            font=("Arial", 12, "bold"),
-            bg=self.cor_frame,
-            padx=10,
-            pady=10
-        )
+        frame = tk.LabelFrame(parent, text="📋 Fila de Pedidos",
+                             font=("Arial", 12, "bold"), bg=self.cor_frame, padx=10, pady=10)
         frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
-        # Treeview para pedidos
         columns = ('ID', 'Mesa', 'Item', 'Status', 'Produtor', 'Consumidor')
         self.tree_pedidos = ttk.Treeview(frame, columns=columns, show='headings', height=15)
 
         for col in columns:
             self.tree_pedidos.heading(col, text=col)
-            if col == 'Item':
-                self.tree_pedidos.column(col, width=150)
-            elif col == 'ID':
-                self.tree_pedidos.column(col, width=80)
-            else:
-                self.tree_pedidos.column(col, width=80)
+            self.tree_pedidos.column(col, width=150 if col == 'Item' else 80)
 
-        # Tags para cores
         self.tree_pedidos.tag_configure('pendente', background='#fff3cd')
         self.tree_pedidos.tag_configure('preparo', background='#cfe2ff')
         self.tree_pedidos.tag_configure('concluido', background='#d1e7dd')
 
         scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.tree_pedidos.yview)
         self.tree_pedidos.configure(yscroll=scrollbar.set)
-
         self.tree_pedidos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
     def criar_painel_logs(self, parent):
-        """Cria painel de logs"""
-        frame = tk.LabelFrame(
-            parent,
-            text="📝 Logs do Sistema",
-            font=("Arial", 12, "bold"),
-            bg=self.cor_frame,
-            padx=10,
-            pady=10
-        )
+        frame = tk.LabelFrame(parent, text="📝 Logs do Sistema",
+                             font=("Arial", 12, "bold"), bg=self.cor_frame, padx=10, pady=10)
         frame.pack(fill=tk.BOTH, expand=True)
 
-        self.text_logs = scrolledtext.ScrolledText(
-            frame,
-            height=10,
-            font=("Courier", 9),
-            bg='#1e1e1e',
-            fg='#d4d4d4',
-            insertbackground='white'
-        )
+        self.text_logs = scrolledtext.ScrolledText(frame, height=10, font=("Courier", 9),
+                                                   bg='#1e1e1e', fg='#d4d4d4')
         self.text_logs.pack(fill=tk.BOTH, expand=True)
 
+    def iniciar_sistema(self):
+        """Inicia o sistema com os parâmetros configurados"""
+        if self.sistema_iniciado:
+            messagebox.showwarning("Aviso", "O sistema já está em execução!")
+            return
+
+        try:
+            num_produtores = int(self.spin_produtores.get())
+            num_consumidores = int(self.spin_consumidores.get())
+            duracao = int(self.spin_duracao.get())
+
+            # Validações
+            if num_produtores < 1 or num_produtores > 10:
+                messagebox.showerror("Erro", "Número de produtores deve estar entre 1 e 10")
+                return
+
+            if num_consumidores < 1 or num_consumidores > 10:
+                messagebox.showerror("Erro", "Número de consumidores deve estar entre 1 e 10")
+                return
+
+            # Desabilitar controles
+            self.spin_produtores.config(state='disabled')
+            self.spin_consumidores.config(state='disabled')
+            self.spin_duracao.config(state='disabled')
+            self.btn_iniciar.config(state=tk.DISABLED)
+            self.btn_parar.config(state=tk.NORMAL)
+
+            # Atualizar status
+            self.label_status.config(text="● Sistema Executando", fg=self.cor_sucesso)
+
+            # Adicionar log
+            self.adicionar_log(f"Iniciando sistema: {num_produtores} produtores, {num_consumidores} consumidores")
+
+            if duracao > 0:
+                self.adicionar_log(f"Duração configurada: {duracao} segundos")
+            else:
+                self.adicionar_log("Duração: Ilimitada")
+
+            # Criar processos
+            self.sistema.criar_processos(num_produtores, num_consumidores)
+
+            self.sistema_iniciado = True
+            self.rodando = True
+
+            # Iniciar atualização da interface
+            self.iniciar_atualizacao()
+
+            # Configurar timer de parada se necessário
+            if duracao > 0:
+                self.timer_parada = Timer(duracao, self.parar_sistema_automatico)
+                self.timer_parada.start()
+                self.adicionar_log(f"Timer de {duracao}s iniciado")
+
+        except ValueError as e:
+            messagebox.showerror("Erro", f"Valores inválidos: {e}")
+
+    def parar_sistema(self):
+        """Para o sistema manualmente"""
+        if not self.sistema_iniciado:
+            return
+
+        if messagebox.askyesno("Confirmar", "Deseja realmente parar o sistema?"):
+            self.parar_sistema_interno()
+
+    def parar_sistema_automatico(self):
+        """Para o sistema automaticamente após tempo configurado"""
+        self.adicionar_log("⏰ Tempo limite atingido - Parando sistema...")
+        self.root.after(0, self.parar_sistema_interno)
+
+    def parar_sistema_interno(self):
+        """Lógica interna de parada"""
+        self.adicionar_log("Parando sistema...")
+
+        # Cancelar timer se existir
+        if self.timer_parada:
+            self.timer_parada.cancel()
+
+        # Parar atualização
+        self.rodando = False
+
+        # Encerrar processos
+        self.sistema.encerrar_processos()
+
+        # Reabilitar controles
+        self.spin_produtores.config(state='normal')
+        self.spin_consumidores.config(state='normal')
+        self.spin_duracao.config(state='normal')
+        self.btn_iniciar.config(state=tk.NORMAL)
+        self.btn_parar.config(state=tk.DISABLED)
+
+        # Atualizar status
+        self.label_status.config(text="● Sistema Parado", fg='#e74c3c')
+
+        self.sistema_iniciado = False
+        self.adicionar_log("✓ Sistema parado com sucesso")
+
+    def limpar_dados(self):
+        """Limpa os dados da memória compartilhada"""
+        if self.sistema_iniciado:
+            messagebox.showwarning("Aviso", "Pare o sistema antes de limpar os dados!")
+            return
+
+        if messagebox.askyesno("Confirmar", "Deseja limpar todos os dados?"):
+            self.sistema.limpar_memoria()
+            self.adicionar_log("🧹 Dados limpos")
+
+            # Limpar interface
+            self.tree_pedidos.delete(*self.tree_pedidos.get_children())
+            self.label_total_criados.config(text="0")
+            self.label_total_processados.config(text="0")
+            self.label_em_fila.config(text="0")
+            self.label_em_preparo.config(text="0")
+
     def atualizar_interface(self):
-        """Atualiza a interface com dados da memória compartilhada"""
+        """Atualiza a interface com dados da memória"""
         try:
             if not self.shm_manager:
                 self.shm_manager = SharedMemoryManager(create=False)
 
-            # Atualizar estatísticas
             stats = self.shm_manager.obter_estatisticas()
             self.label_total_criados.config(text=str(stats.get('total_criados', 0)))
             self.label_total_processados.config(text=str(stats.get('total_processados', 0)))
 
-            # Obter todos os pedidos
             pedidos = self.shm_manager.obter_todos_pedidos()
-
-            # Contar pedidos por status
             em_fila = sum(1 for p in pedidos if p.status == PedidoStatus.PENDENTE.value)
             em_preparo = sum(1 for p in pedidos if p.status == PedidoStatus.EM_PREPARO.value)
 
             self.label_em_fila.config(text=str(em_fila))
             self.label_em_preparo.config(text=str(em_preparo))
 
-            # Atualizar tabela de pedidos
             self.tree_pedidos.delete(*self.tree_pedidos.get_children())
-
-            for pedido in reversed(pedidos[-30:]):  # Mostrar últimos 30
+            for pedido in reversed(pedidos[-30:]):
                 consumidor_str = str(pedido.consumidor_id) if pedido.consumidor_id != -1 else '-'
-
-                tag = ''
-                if pedido.status == PedidoStatus.PENDENTE.value:
-                    tag = 'pendente'
-                elif pedido.status == PedidoStatus.EM_PREPARO.value:
-                    tag = 'preparo'
-                else:
-                    tag = 'concluido'
-
+                tag = 'pendente' if pedido.status == PedidoStatus.PENDENTE.value else \
+                      'preparo' if pedido.status == PedidoStatus.EM_PREPARO.value else 'concluido'
                 self.tree_pedidos.insert('', 'end', values=(
-                    pedido.id,
-                    pedido.mesa,
-                    pedido.item,
-                    pedido.status,
-                    pedido.produtor_id,
-                    consumidor_str
+                    pedido.id, pedido.mesa, pedido.item, pedido.status, pedido.produtor_id, consumidor_str
                 ), tags=(tag,))
 
-            # Atualizar processos
             self.atualizar_processos()
-
         except Exception as e:
-            self.adicionar_log(f"Erro ao atualizar interface: {e}")
+            pass
 
     def atualizar_processos(self):
         """Atualiza informações dos processos"""
         self.tree_processos.delete(*self.tree_processos.get_children())
-
-        for tipo, lista_processos in self.processos.items():
+        for tipo, lista_processos in self.sistema.processos.items():
             for proc_info in lista_processos:
                 proc = proc_info['process']
-                proc_id = proc_info['id']
-
                 try:
                     if proc.is_alive():
                         processo = psutil.Process(proc.pid)
                         cpu = processo.cpu_percent(interval=0.1)
-                        mem = processo.memory_info().rss / 1024 / 1024  # MB
+                        mem = processo.memory_info().rss / 1024 / 1024
                         status = "Ativo"
                     else:
-                        cpu = 0
-                        mem = 0
-                        status = "Inativo"
+                        cpu, mem, status = 0, 0, "Inativo"
 
                     self.tree_processos.insert('', 'end', values=(
-                        tipo.capitalize(),
-                        proc_id,
+                        tipo.capitalize(), proc_info['id'],
                         proc.pid if proc.is_alive() else '-',
-                        status,
-                        f"{cpu:.1f}",
-                        f"{mem:.1f}"
+                        status, f"{cpu:.1f}", f"{mem:.1f}"
                     ))
                 except:
-                    self.tree_processos.insert('', 'end', values=(
-                        tipo.capitalize(),
-                        proc_id,
-                        '-',
-                        "Erro",
-                        '-',
-                        '-'
-                    ))
+                    pass
 
     def adicionar_log(self, mensagem):
         """Adiciona mensagem ao log"""
@@ -325,13 +375,14 @@ class SistemaGUI:
                 except:
                     break
 
-        thread = Thread(target=loop_atualizacao, daemon=True)
-        thread.start()
-
-        self.adicionar_log("Sistema iniciado")
+        Thread(target=loop_atualizacao, daemon=True).start()
+        self.adicionar_log("Sistema monitorando em tempo real")
 
     def executar(self):
         """Inicia a interface gráfica"""
+        self.adicionar_log("Interface gráfica iniciada")
+        self.adicionar_log("Configure os parâmetros e clique em INICIAR SISTEMA")
+
         try:
             self.root.mainloop()
         finally:

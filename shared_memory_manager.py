@@ -200,6 +200,23 @@ class SharedMemoryManager:
         except:
             return {'total_criados': 0, 'total_processados': 0, 'em_fila': 0}
 
+    def limpar(self):
+        """Limpa todos os pedidos da memória compartilhada"""
+        try:
+            with self.lock:
+                self._write_data_unsafe({
+                    'pedidos': [],
+                    'stats': {
+                        'total_criados': 0,
+                        'total_processados': 0,
+                        'em_fila': 0
+                    }
+                })
+            return True
+        except Exception as e:
+            print(f"Erro ao limpar memória: {e}")
+            return False
+
     def close(self):
         if self.shm:
             try:
