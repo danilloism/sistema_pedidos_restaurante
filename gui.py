@@ -7,6 +7,9 @@ import time
 import psutil
 from threading import Thread, Timer
 from shared_memory_manager import SharedMemoryManager, PedidoStatus
+from datetime import datetime
+import csv
+import json
 
 class SistemaGUI:
     def __init__(self, sistema):
@@ -116,6 +119,12 @@ class SistemaGUI:
                                     fg='white', command=self.limpar_dados,
                                     padx=20, pady=10, cursor='hand2')
         self.btn_limpar.pack(side=tk.LEFT, padx=5)
+
+        self.btn_exportar = tk.Button(btn_frame, text="📊 EXPORTAR DADOS",
+                                      font=("Arial", 12), bg='#3498db',
+                                      fg='white', command=self.exportar_dados,
+                                      padx=20, pady=10, cursor='hand2')
+        self.btn_exportar.pack(side=tk.LEFT, padx=5)
 
         # Label de status
         self.label_status = tk.Label(btn_frame, text="● Sistema Parado",
@@ -389,3 +398,112 @@ class SistemaGUI:
             self.rodando = False
             if self.shm_manager:
                 self.shm_manager.close()
+
+    def exportar_dados(self):
+        """Exporta dados para arquivo CSV e JSON"""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            # Obter dados atuais
+            stats = self.shm_manager.obter_estatisticas() if self.shm_manager else {
+                'total_criados': 0, 'total_processados': 0, 'em_fila': 0
+            }
+            pedidos = self.shm_manager.obter_todos_pedidos() if self.shm_manager else []
+
+            # Obter parâmetros da configuração
+            try:
+                num_produtores = int(self.spin_produtores.get())
+                num_consumidores = int(self.spin_consumidores.get())
+                duracao = int(self.spin_duracao.get())
+            except:
+                num_produtores = len(self.sistema.processos.get('produtor', []))
+                num_consumidores = len(self.sistema.processos.get('consumidor', []))
+                duracao = 0
+
+            # Exportar para CSV
+            csv_filename = f'pedidos_{timestamp}.csv'
+            with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+
+                # Cabeçalho com parâmetros
+                writer.writerow(['PARÂMETROS DO SISTEMA'])
+                writer.writerow(['Número de Produtores', num_produtores])
+                writer.writerow(['Número de Consumidores', num_consumidores])
+                writer.writerow(['Duração (segundos)', duracao if duracao > 0 else 'Ilimitada'])
+                writer.writerow(['Data/Hora Exportação', datetime.now().strftime("%d/%m/%Y %H:%M:%S")])
+                writer.writerow([])
+
+                # Estatísticas
+                writer.writerow(['ESTATÍSTICAS'])
+                writer.writerow(['Total Criados', stats.get('total_criados', 0)])
+                writer.writerow(['Total Processados', stats.get('total_processados', 0)])
+                writer.writerow(['Em Fila', stats.get('em_fila', 0)])
+                em_preparo = len([p for p in pedidos if p.status == 'Em Preparo'])
+                writer.writerow(['Em Preparo', em_preparo])
+                writer.writerow([])
+
+                # Pedidos
+                writer.writerow(['FILA DE PEDIDOS'])
+                writer.writerow(['ID', 'Mesa', 'Item', 'Status', 'Produtor', 'Consumidor', 'Timestamp'])
+
+                for pedido in pedidos:
+                    timestamp_pedido = datetime.fromtimestamp(pedido.timestamp).strftime("%d/%m/%Y %H:%M:%S")
+                    consumidor_str = str(pedido.consumidor_id) if pedido.consumidor_id != -1 else 'N/A'
+                    writer.writerow([
+                        pedido.id,
+                        pedido.mesa,
+                        pedido.item,
+                        pedido.status,
+                        pedido.produtor_id,
+                        consumidor_str,
+                        timestamp_pedido
+                    ])
+
+            # Exportar para JSON
+            json_filename = f'pedidos_{timestamp}.json'
+            dados_json = {
+                'parametros': {
+                    'num_produtores': num_produtores,
+                    'num_consumidores': num_consumidores,
+                    'duracao_segundos': duracao if duracao > 0 else 'ilimitada',
+                    'data_exportacao': datetime.now().isoformat()
+                },
+                'estatisticas': {
+                    'total_criados': stats.get('total_criados', 0),
+                    'total_processados': stats.get('total_processados', 0),
+                    'em_fila': stats.get('em_fila', 0),
+                    'em_preparo': em_preparo
+                },
+                'pedidos': [
+                    {
+                        'id': p.id,
+                        'mesa': p.mesa,
+                        'item': p.item,
+                        'status': p.status,
+                        'produtor_id': p.produtor_id,
+                        'consumidor_id': p.consumidor_id if p.consumidor_id != -1 else None,
+                        'timestamp': datetime.fromtimestamp(p.timestamp).isoformat()
+                    }
+                    for p in pedidos
+                ]
+            }
+
+            with open(json_filename, 'w', encoding='utf-8') as jsonfile:
+                json.dump(dados_json, jsonfile, indent=2, ensure_ascii=False)
+
+            # Mensagem de sucesso
+            from tkinter import messagebox
+            messagebox.showinfo(
+                "Exportação Concluída",
+                f"Dados exportados com sucesso!\n\n"
+                f"📄 CSV: {csv_filename}\n"
+                f"📄 JSON: {json_filename}\n\n"
+                f"Total de pedidos: {len(pedidos)}"
+            )
+
+            self.adicionar_log(f"📊 Dados exportados: {csv_filename}, {json_filename}")
+
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror("Erro", f"Erro ao exportar dados:\n{e}")
+            self.adicionar_log(f"❌ Erro ao exportar: {e}")
