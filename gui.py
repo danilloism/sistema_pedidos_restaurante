@@ -1,6 +1,3 @@
-"""
-Interface Gráfica com Controle de Execução
-"""
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 import time

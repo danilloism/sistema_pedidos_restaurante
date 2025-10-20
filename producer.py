@@ -1,7 +1,3 @@
-"""
-Processo Produtor - Garçons criando pedidos
-Simula garçons recebendo pedidos e adicionando à fila compartilhada
-"""
 import os
 import sys
 import time
@@ -10,7 +6,6 @@ from multiprocessing import Process
 from shared_memory_manager import SharedMemoryManager, Pedido, PedidoStatus
 
 class Produtor:
-    """Processo produtor que cria pedidos"""
 
     ITENS_MENU = [
         "Pizza Margherita",
@@ -33,18 +28,14 @@ class Produtor:
         self.ativo = True
 
     def executar(self):
-        """Loop principal do produtor"""
         print(f"[Produtor {self.produtor_id}] Iniciado (PID: {os.getpid()})")
 
-        # Conectar à memória compartilhada
         shm_manager = SharedMemoryManager(create=False)
 
         try:
             while self.ativo:
-                # Aguardar intervalo aleatório
                 time.sleep(random.uniform(self.intervalo_min, self.intervalo_max))
 
-                # Criar novo pedido
                 self.contador_pedidos += 1
                 pedido_id = int(f"{self.produtor_id}{self.contador_pedidos:04d}")
 
@@ -57,7 +48,6 @@ class Produtor:
                     produtor_id=self.produtor_id
                 )
 
-                # Adicionar à memória compartilhada
                 sucesso = shm_manager.adicionar_pedido(pedido)
 
                 if sucesso:
@@ -73,7 +63,6 @@ class Produtor:
             print(f"[Produtor {self.produtor_id}] Encerrado")
 
 def iniciar_produtor(produtor_id: int, intervalo_min=1, intervalo_max=4):
-    """Função para iniciar um processo produtor"""
     produtor = Produtor(produtor_id, intervalo_min, intervalo_max)
     produtor.executar()
 

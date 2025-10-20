@@ -1,8 +1,3 @@
-"""
-Sistema de Gerenciamento de Pedidos com Memória Compartilhada
-Arquivo principal que coordena produtores, consumidores e interface gráfica
-"""
-import os
 import time
 from multiprocessing import Process
 from shared_memory_manager import SharedMemoryManager
