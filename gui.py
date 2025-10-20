@@ -222,6 +222,10 @@ class SistemaGUI:
                 messagebox.showerror("Erro", "Número de consumidores deve estar entre 1 e 10")
                 return
 
+            # Resetar flag de encerramento
+            if self.shm_manager:
+                self.shm_manager.em_encerramento = False
+
             # Desabilitar controles
             self.spin_produtores.config(state='disabled')
             self.spin_consumidores.config(state='disabled')
@@ -263,13 +267,16 @@ class SistemaGUI:
         if not self.sistema_iniciado:
             return
 
-        if messagebox.askyesno("Confirmar", "Deseja realmente parar o sistema?"):
-            self.parar_sistema_interno()
+        if messagebox.askyesno("Confirmar",
+                               "Deseja parar o sistema?\n\n"
+                               "• Pedidos pendentes serão cancelados\n"
+                               "• Pedidos em preparo serão finalizados"):
+            self.parar_sistema_graceful()
 
     def parar_sistema_automatico(self):
         """Para o sistema automaticamente após tempo configurado"""
-        self.adicionar_log("⏰ Tempo limite atingido - Parando sistema...")
-        self.root.after(0, self.parar_sistema_interno)
+        self.adicionar_log("⏰ Tempo limite atingido - Iniciando parada...")
+        self.root.after(0, self.parar_sistema_graceful)
 
     def parar_sistema_interno(self):
         """Lógica interna de parada"""
@@ -297,6 +304,161 @@ class SistemaGUI:
 
         self.sistema_iniciado = False
         self.adicionar_log("✓ Sistema parado com sucesso")
+
+    def parar_sistema_graceful(self):
+        """Parada graceful: cancela pendentes e aguarda em preparo"""
+        try:
+            # Mudar status visual
+            self.label_status.config(text="⏳ Finalizando...", fg='#f39c12')
+            self.btn_parar.config(state=tk.DISABLED)
+
+            # 1. MARCAR SISTEMA EM ENCERRAMENTO (impede consumidores pegarem novos pedidos)
+            if self.shm_manager:
+                self.shm_manager.marcar_encerramento()
+                self.adicionar_log("🚫 Sistema marcado para encerramento")
+
+            # 2. Encerrar produtores
+            self.adicionar_log("🛑 Encerrando produtores...")
+            for proc_info in self.sistema.processos.get('produtor', []):
+                proc = proc_info['process']
+                if proc.is_alive():
+                    proc.terminate()
+                    proc.join(timeout=1)
+                    if proc.is_alive():
+                        proc.kill()
+
+            # Aguardar produtores pararem
+            import time
+            time.sleep(0.5)
+
+            # 3. Cancelar pedidos pendentes
+            if self.shm_manager:
+                pendentes = self.shm_manager.cancelar_pedidos_pendentes()
+                if pendentes > 0:
+                    self.adicionar_log(f"❌ {pendentes} pedidos pendentes cancelados")
+
+            # 4. Aguardar pedidos em preparo
+            if self.shm_manager:
+                em_preparo = self.shm_manager.obter_pedidos_em_preparo()
+                if em_preparo > 0:
+                    self.adicionar_log(f"⏳ Aguardando {em_preparo} pedidos em preparo...")
+                    self.label_status.config(
+                        text=f"⏳ Aguardando {em_preparo} pedidos...",
+                        fg='#f39c12'
+                    )
+
+                    def aguardar_conclusao():
+                        import time
+                        timeout = 60
+                        tempo_inicio = time.time()
+                        ultima_contagem = em_preparo
+                        tempo_sem_mudanca = 0
+
+                        while True:
+                            if not self.shm_manager:
+                                break
+
+                            em_preparo_atual = self.shm_manager.obter_pedidos_em_preparo()
+
+                            # Log de progresso quando contador muda
+                            if em_preparo_atual != ultima_contagem:
+                                ultima_contagem = em_preparo_atual
+                                tempo_sem_mudanca = 0
+                                self.root.after(0, lambda n=em_preparo_atual: self.adicionar_log(
+                                    f"📉 Restam {n} pedidos em preparo"
+                                ))
+                            else:
+                                tempo_sem_mudanca += 1
+
+                            # Atualizar label
+                            self.root.after(0, lambda n=em_preparo_atual:
+                            self.label_status.config(
+                                text=f"⏳ Aguardando {n} pedidos..." if n > 0
+                                else "⏳ Finalizando...",
+                                fg='#f39c12'
+                            ))
+
+                            if em_preparo_atual == 0:
+                                self.root.after(0, lambda: self.adicionar_log(
+                                    "✓ Todos os pedidos em preparo foram concluídos"
+                                ))
+                                break
+
+                            # Timeout geral (60s)
+                            if time.time() - tempo_inicio > timeout:
+                                self.root.after(0, lambda n=em_preparo_atual: self.adicionar_log(
+                                    f"⚠️ Timeout: Forçando encerramento ({n} pedidos não finalizados)"
+                                ))
+                                break
+
+                            # Timeout por inatividade (15s sem mudança)
+                            if tempo_sem_mudanca > 15:
+                                self.root.after(0, lambda n=em_preparo_atual: self.adicionar_log(
+                                    f"⚠️ Timeout por inatividade ({n} pedidos travados)"
+                                ))
+                                break
+
+                            time.sleep(1)
+
+                        self.root.after(0, self.finalizar_encerramento)
+
+                    from threading import Thread
+                    Thread(target=aguardar_conclusao, daemon=True).start()
+                else:
+                    self.finalizar_encerramento()
+            else:
+                self.finalizar_encerramento()
+
+        except Exception as e:
+            self.adicionar_log(f"❌ Erro durante parada: {e}")
+            self.finalizar_encerramento()
+
+    def finalizar_encerramento(self):
+        """Finaliza o encerramento do sistema"""
+        try:
+            # Encerrar consumidores
+            self.adicionar_log("🛑 Encerrando consumidores...")
+            for proc_info in self.sistema.processos.get('consumidor', []):
+                proc = proc_info['process']
+                if proc.is_alive():
+                    proc.terminate()
+                    proc.join(timeout=1)
+                    if proc.is_alive():
+                        proc.kill()
+
+            # Cancelar timer se existir
+            if self.timer_parada:
+                self.timer_parada.cancel()
+
+            # Parar atualização
+            self.rodando = False
+
+            # Limpar lista de processos
+            self.sistema.processos = {'produtor': [], 'consumidor': []}
+
+            # Reabilitar controles
+            self.spin_produtores.config(state='normal')
+            self.spin_consumidores.config(state='normal')
+            self.spin_duracao.config(state='normal')
+            self.btn_iniciar.config(state=tk.NORMAL)
+            self.btn_parar.config(state=tk.DISABLED)
+
+            # Atualizar status
+            self.label_status.config(text="● Sistema Parado", fg='#e74c3c')
+
+            self.sistema_iniciado = False
+            self.adicionar_log("✓ Sistema parado com sucesso")
+
+        except Exception as e:
+            self.adicionar_log(f"❌ Erro ao finalizar: {e}")
+            # Garantir reabilitação dos controles
+            self.spin_produtores.config(state='normal')
+            self.spin_consumidores.config(state='normal')
+            self.spin_duracao.config(state='normal')
+            self.btn_iniciar.config(state=tk.NORMAL)
+            self.btn_parar.config(state=tk.DISABLED)
+            self.label_status.config(text="● Sistema Parado", fg='#e74c3c')
+            self.sistema_iniciado = False
 
     def limpar_dados(self):
         """Limpa os dados da memória compartilhada"""

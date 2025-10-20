@@ -47,6 +47,7 @@ class SharedMemoryManager:
         self.name = name
         self.shm = None
         self.lock = lock if lock else Lock()
+        self.em_encerramento = False
 
         if create:
             try:
@@ -149,7 +150,11 @@ class SharedMemoryManager:
         return False
 
     def obter_proximo_pedido(self, consumidor_id: int):
-        """Obtém próximo pedido (thread-safe)"""
+        """Obtém o próximo pedido pendente (thread-safe)"""
+        # ← NOVA VERIFICAÇÃO: Não pegar novos pedidos se em encerramento
+        if hasattr(self, 'em_encerramento') and self.em_encerramento:
+            return None
+
         for tentativa in range(3):
             try:
                 with self.lock:
@@ -165,6 +170,14 @@ class SharedMemoryManager:
                 if tentativa < 2:
                     time.sleep(0.1)
         return None
+
+    def marcar_encerramento(self):
+        """Marca o sistema como em encerramento"""
+        self.em_encerramento = True
+
+    def resetar_encerramento(self):
+        """Reseta flag de encerramento"""
+        self.em_encerramento = False
 
     def finalizar_pedido(self, pedido_id: int) -> bool:
         """Finaliza pedido (thread-safe)"""
@@ -199,6 +212,38 @@ class SharedMemoryManager:
                 return data['stats']
         except:
             return {'total_criados': 0, 'total_processados': 0, 'em_fila': 0}
+
+    def cancelar_pedidos_pendentes(self):
+        """Cancela todos os pedidos pendentes"""
+        try:
+            with self.lock:
+                data = self._read_data_unsafe()
+
+                # Contar pendentes antes
+                pendentes_antes = len([p for p in data['pedidos']
+                                       if p['status'] == PedidoStatus.PENDENTE.value])
+
+                # Remover pedidos pendentes
+                data['pedidos'] = [p for p in data['pedidos']
+                                   if p['status'] != PedidoStatus.PENDENTE.value]
+
+                # Atualizar estatística
+                data['stats']['em_fila'] = 0
+
+                self._write_data_unsafe(data)
+                return pendentes_antes
+        except:
+            return 0
+
+    def obter_pedidos_em_preparo(self):
+        """Retorna quantidade de pedidos em preparo"""
+        try:
+            with self.lock:
+                data = self._read_data_unsafe()
+                return len([p for p in data['pedidos']
+                            if p['status'] == PedidoStatus.EM_PREPARO.value])
+        except:
+            return 0
 
     def limpar(self):
         """Limpa todos os pedidos da memória compartilhada"""
