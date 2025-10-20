@@ -1,0 +1,2 @@
+# Dependências do Sistema de Gerenciamento de Pedidos
+psutil>=5.9.0
