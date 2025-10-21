@@ -915,8 +915,8 @@ Todos os testes foram executados com a interface gráfica ativa, permitindo moni
 - Painel de logs registrando operação
 
 #### Captura de Tela 4: Arquivos Exportados no Excel
-**Descrição:**
 ![](./prints/3133.png)
+**Descrição:**
 - Arquivo CSV aberto no Excel
 - Seções claramente separadas: Parâmetros, Estatísticas, Pedidos
 - Dados formatados e legíveis
